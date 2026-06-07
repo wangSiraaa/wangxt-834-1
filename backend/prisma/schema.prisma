@@ -1,0 +1,163 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  RESEARCHER
+  TRIAGER
+  DEVELOPER
+  ADMIN
+  APPROVER
+}
+
+enum ReportStatus {
+  SUBMITTED
+  TRIAGING
+  DUPLICATE
+  ASSIGNED
+  FIXING
+  FIXED
+  RETESTING
+  VERIFIED
+  REJECTED
+  APPROVING_BOUNTY
+  BOUNTY_APPROVED
+  BOUNTY_REJECTED
+  PUBLICLY_ACKNOWLEDGED
+}
+
+enum Severity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+model User {
+  id        String   @id @default(uuid())
+  username  String   @unique
+  email     String   @unique
+  password  String
+  role      UserRole
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  submittedReports Report[] @relation("Submitter")
+  assignedReports  Report[] @relation("Assignee")
+  bountyApprovals  BountyApproval[]
+  auditLogs        AuditLog[]
+}
+
+model Asset {
+  id          String   @id @default(uuid())
+  name        String
+  description String?
+  url         String
+  assetType   String
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  reports Report[]
+}
+
+model Report {
+  id            String        @id @default(uuid())
+  title         String
+  description   String
+  proofOfConcept String?
+  severity      Severity
+  status        ReportStatus  @default(SUBMITTED)
+  assetId       String
+  submitterId   String
+  assigneeId    String?
+  duplicateOfId String?
+  isMerged      Boolean       @default(false)
+  bountyAmount  Decimal?
+  acknowledged  Boolean       @default(false)
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  asset       Asset     @relation(fields: [assetId], references: [id])
+  submitter   User      @relation("Submitter", fields: [submitterId], references: [id])
+  assignee    User?     @relation("Assignee", fields: [assigneeId], references: [id])
+  duplicateOf Report?   @relation("Duplicate", fields: [duplicateOfId], references: [id])
+  duplicates  Report[]  @relation("Duplicate")
+
+  bountyApprovals BountyApproval[]
+  statusHistory   StatusHistory[]
+  auditLogs       AuditLog[]
+  comments        ReportComment[]
+  retestRecords   RetestRecord[]
+}
+
+model StatusHistory {
+  id          String       @id @default(uuid())
+  reportId    String
+  fromStatus  ReportStatus?
+  toStatus    ReportStatus
+  changedById String
+  note        String?
+  createdAt   DateTime     @default(now())
+
+  report    Report @relation(fields: [reportId], references: [id])
+  changedBy User   @relation(fields: [changedById], references: [id])
+}
+
+model ReportComment {
+  id        String   @id @default(uuid())
+  reportId  String
+  userId    String
+  content   String
+  isPrivate Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  report Report @relation(fields: [reportId], references: [id])
+  user   User   @relation(fields: [userId], references: [id])
+}
+
+model RetestRecord {
+  id             String   @id @default(uuid())
+  reportId       String
+  researcherId   String
+  isVerified     Boolean
+  comment        String?
+  verifiedAt     DateTime?
+  createdAt      DateTime @default(now())
+
+  report     Report @relation(fields: [reportId], references: [id])
+  researcher User   @relation(fields: [researcherId], references: [id])
+}
+
+model BountyApproval {
+  id         String   @id @default(uuid())
+  reportId   String
+  approverId String
+  amount     Decimal
+  isApproved Boolean
+  comment    String?
+  approvedAt DateTime?
+  createdAt  DateTime @default(now())
+
+  report   Report @relation(fields: [reportId], references: [id])
+  approver User   @relation(fields: [approverId], references: [id])
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  reportId   String?
+  userId     String?
+  action     String
+  details    String?
+  ipAddress  String?
+  createdAt  DateTime @default(now())
+
+  user   User?   @relation(fields: [userId], references: [id])
+  report Report? @relation(fields: [reportId], references: [id])
+}

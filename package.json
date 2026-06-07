@@ -1,0 +1,23 @@
+{
+  "name": "bug-bounty-platform",
+  "version": "1.0.0",
+  "description": "Vulnerability Bug Bounty Report Processing Platform",
+  "private": true,
+  "workspaces": [
+    "backend",
+    "frontend"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm run dev --workspace=backend\" \"npm run dev --workspace=frontend\"",
+    "dev:backend": "npm run dev --workspace=backend",
+    "dev:frontend": "npm run dev --workspace=frontend",
+    "seed": "npm run seed --workspace=backend",
+    "prisma:setup": "npm run prisma:setup --workspace=backend",
+    "verify:duplicate": "npm run verify:duplicate --workspace=backend",
+    "verify:all": "npm run verify:all --workspace=backend",
+    "build": "npm run build --workspace=backend && npm run build --workspace=frontend"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
