@@ -4,6 +4,7 @@ import { useAuth } from './context/AuthContext'
 import LoginPage from './pages/LoginPage'
 import ReportsList from './pages/ReportsList'
 import ReportDetail from './pages/ReportDetail'
+import AuditReplay from './pages/AuditReplay'
 import SubmitReport from './pages/SubmitReport'
 import Acknowledgments from './pages/Acknowledgments'
 import Dashboard from './pages/Dashboard'
@@ -51,6 +52,7 @@ function App() {
           <Route path="/" element={<Dashboard />} />
           <Route path="/reports" element={<ReportsList />} />
           <Route path="/reports/:id" element={<ReportDetail />} />
+          <Route path="/reports/:id/audit" element={<AuditReplay />} />
           <Route path="/submit" element={<SubmitReport />} />
           <Route path="/acknowledgments" element={<Acknowledgments />} />
           <Route path="*" element={<Navigate to="/" replace />} />

@@ -1,4 +1,5 @@
 import { Response } from 'express'
+import prisma from '../prisma'
 import { AuthRequest, Severity } from '../types'
 import { ReportService } from '../services/ReportService'
 import { z } from 'zod'
@@ -296,19 +297,27 @@ export async function requestBountyApproval(req: AuthRequest, res: Response) {
       })
     }
 
-    const report = await ReportService.requestBountyApproval(
+    const result = await ReportService.requestBountyApproval(
       id,
       req.user.userId,
       bountyAmount
     )
 
+    if (!result.success) {
+      return res.status(400).json({
+        success: false,
+        error: result.error,
+        details: result.details
+      })
+    }
+
     return res.json({
       success: true,
-      data: report,
+      data: result.data,
       message: '已提交奖金审批申请'
     })
   } catch (err) {
-    return res.status(400).json({
+    return res.status(500).json({
       success: false,
       error: err instanceof Error ? err.message : '申请失败'
     })
@@ -329,7 +338,7 @@ export async function approveBounty(req: AuthRequest, res: Response) {
       })
     }
 
-    const report = await ReportService.approveBounty(
+    const result = await ReportService.approveBounty(
       id,
       req.user.userId,
       isApproved,
@@ -337,13 +346,21 @@ export async function approveBounty(req: AuthRequest, res: Response) {
       comment
     )
 
+    if (!result.success) {
+      return res.status(400).json({
+        success: false,
+        error: result.error,
+        details: result.details
+      })
+    }
+
     return res.json({
       success: true,
-      data: report,
+      data: result.data,
       message: isApproved ? '奖金已批准' : '奖金已拒绝'
     })
   } catch (err) {
-    return res.status(400).json({
+    return res.status(500).json({
       success: false,
       error: err instanceof Error ? err.message : '操作失败'
     })
@@ -537,6 +554,78 @@ export async function getAcknowledgedResearchers(req: AuthRequest, res: Response
     return res.status(500).json({
       success: false,
       error: '获取公开致谢列表失败'
+    })
+  }
+}
+
+export async function getAuditReplay(req: AuthRequest, res: Response) {
+  try {
+    if (!req.user) return res.status(401).json({ success: false, error: '未登录' })
+
+    const { id } = req.params
+    const data = await ReportService.getAuditReplay(id)
+
+    return res.json({
+      success: true,
+      data
+    })
+  } catch (err) {
+    console.error('Get audit replay error:', err)
+    return res.status(400).json({
+      success: false,
+      error: err instanceof Error ? err.message : '获取审计回放数据失败'
+    })
+  }
+}
+
+export async function getAuditLogs(req: AuthRequest, res: Response) {
+  try {
+    if (!req.user) return res.status(401).json({ success: false, error: '未登录' })
+
+    const { id } = req.params
+    const { page = 1, limit = 20 } = req.query
+
+    const auditLogs = await prisma.auditLog.findMany({
+      where: { reportId: id },
+      include: {
+        user: { select: { name: true, role: true } }
+      },
+      orderBy: { createdAt: 'desc' },
+      take: Number(limit),
+      skip: (Number(page) - 1) * Number(limit)
+    })
+
+    return res.json({
+      success: true,
+      data: auditLogs
+    })
+  } catch (err) {
+    console.error('Get audit logs error:', err)
+    return res.status(500).json({
+      success: false,
+      error: '获取审计日志失败'
+    })
+  }
+}
+
+export async function validateBountyEligibility(req: AuthRequest, res: Response) {
+  try {
+    if (!req.user) return res.status(401).json({ success: false, error: '未登录' })
+
+    const { id } = req.params
+    const result = await ReportService.validateCriticalVulnerabilityBounty(id)
+
+    return res.json({
+      success: true,
+      data: {
+        eligible: result.valid,
+        errors: result.errors
+      }
+    })
+  } catch (err) {
+    return res.status(500).json({
+      success: false,
+      error: '奖金资格校验失败'
     })
   }
 }

@@ -346,33 +346,44 @@ export class ReportService {
   }
 
   static async requestBountyApproval(reportId: string, userId: string, bountyAmount: number) {
-    const report = await prisma.report.findUnique({ where: { id: reportId } })
-    if (!report) throw new Error('报告不存在')
-    
-    if (asReportStatus(report.status) !== ReportStatus.VERIFIED) {
-      throw new Error('只有验证通过的报告才能申请奖金审批')
-    }
+    return this.processReportWithValidation(
+      reportId,
+      userId,
+      'REQUEST_BOUNTY',
+      async () => {
+        const report = await prisma.report.findUnique({ where: { id: reportId } })
+        if (!report) {
+          return {
+            valid: false,
+            errors: [{ code: 'REPORT_NOT_FOUND', message: '报告不存在' }]
+          }
+        }
+        
+        if (asReportStatus(report.status) !== ReportStatus.VERIFIED) {
+          return {
+            valid: false,
+            errors: [{ code: 'INVALID_STATUS', message: '只有验证通过的报告才能申请奖金审批' }]
+          }
+        }
 
-    const criticalSeverities: Severity[] = [Severity.HIGH, Severity.CRITICAL]
-    if (criticalSeverities.includes(asSeverity(report.severity))) {
-      if (asReportStatus(report.status) !== ReportStatus.VERIFIED) {
-        throw new Error('硬校验：严重/高危漏洞必须修复并验证通过后才能申请奖金')
+        return this.validateCriticalVulnerabilityBounty(reportId)
+      },
+      async () => {
+        const updated = await prisma.report.update({
+          where: { id: reportId },
+          data: {
+            status: ReportStatus.APPROVING_BOUNTY,
+            bountyAmount
+          }
+        })
+
+        await this.addStatusHistory(reportId, ReportStatus.VERIFIED, ReportStatus.APPROVING_BOUNTY, userId,
+          `申请奖金: ¥${bountyAmount}`)
+        await this.addAuditLog('REQUEST_BOUNTY', userId, reportId, `金额: ¥${bountyAmount}`)
+
+        return updated
       }
-    }
-
-    const updated = await prisma.report.update({
-      where: { id: reportId },
-      data: {
-        status: ReportStatus.APPROVING_BOUNTY,
-        bountyAmount
-      }
-    })
-
-    await this.addStatusHistory(reportId, ReportStatus.VERIFIED, ReportStatus.APPROVING_BOUNTY, userId,
-      `申请奖金: ¥${bountyAmount}`)
-    await this.addAuditLog('REQUEST_BOUNTY', userId, reportId, `金额: ¥${bountyAmount}`)
-
-    return updated
+    )
   }
 
   static async approveBounty(
@@ -382,56 +393,84 @@ export class ReportService {
     amount: number,
     comment?: string
   ) {
-    const report = await prisma.report.findUnique({ where: { id: reportId } })
-    if (!report) throw new Error('报告不存在')
-    if (asReportStatus(report.status) !== ReportStatus.APPROVING_BOUNTY) {
-      throw new Error('只有审批中的奖金申请才能处理')
-    }
-
-    const criticalSeverities: Severity[] = [Severity.HIGH, Severity.CRITICAL]
-    if (isApproved && criticalSeverities.includes(asSeverity(report.severity))) {
-      if (asReportStatus(report.status) !== ReportStatus.APPROVING_BOUNTY) {
-        throw new Error('硬校验：严重/高危漏洞必须验证通过后才能发奖')
-      }
-      const hasVerifiedRetest = await prisma.retestRecord.findFirst({
-        where: { reportId, isVerified: true }
-      })
-      if (!hasVerifiedRetest) {
-        throw new Error('硬校验：严重/高危漏洞必须有研究员复测确认记录才能发奖')
-      }
-    }
-
-    const toStatus = isApproved ? ReportStatus.BOUNTY_APPROVED : ReportStatus.BOUNTY_REJECTED
-
-    const updated = await prisma.report.update({
-      where: { id: reportId },
-      data: {
-        status: toStatus,
-        bountyAmount: isApproved ? amount : report.bountyAmount
-      }
-    })
-
-    await prisma.bountyApproval.create({
-      data: {
-        reportId,
-        approverId,
-        amount,
-        isApproved,
-        comment,
-        approvedAt: isApproved ? new Date() : null
-      }
-    })
-
-    await this.addStatusHistory(reportId, ReportStatus.APPROVING_BOUNTY, toStatus, approverId,
-      `奖金${isApproved ? '通过' : '拒绝'}: ¥${amount}${comment ? ' - ' + comment : ''}`)
-    await this.addAuditLog(
-      isApproved ? 'BOUNTY_APPROVED' : 'BOUNTY_REJECTED',
-      approverId,
+    return this.processReportWithValidation(
       reportId,
-      `金额: ¥${amount}, ${comment || ''}`
-    )
+      approverId,
+      isApproved ? 'BOUNTY_APPROVED' : 'BOUNTY_REJECTED',
+      async () => {
+        const report = await prisma.report.findUnique({ where: { id: reportId } })
+        if (!report) {
+          return {
+            valid: false,
+            errors: [{ code: 'REPORT_NOT_FOUND', message: '报告不存在' }]
+          }
+        }
+        if (asReportStatus(report.status) !== ReportStatus.APPROVING_BOUNTY) {
+          return {
+            valid: false,
+            errors: [{ code: 'INVALID_STATUS', message: '只有审批中的奖金申请才能处理' }]
+          }
+        }
 
-    return updated
+        if (isApproved) {
+          const criticalValidation = await this.validateCriticalVulnerabilityBounty(reportId)
+          if (!criticalValidation.valid) {
+            return criticalValidation
+          }
+
+          const hasVerifiedRetest = await prisma.retestRecord.findFirst({
+            where: { reportId, isVerified: true }
+          })
+          if (!hasVerifiedRetest) {
+            return {
+              valid: false,
+              errors: [{
+                code: 'NO_RETEST_RECORD',
+                message: '硬校验：严重/高危漏洞必须有研究员复测确认记录才能发奖'
+              }]
+            }
+          }
+        }
+
+        return { valid: true, errors: [] }
+      },
+      async () => {
+        const report = await prisma.report.findUnique({ where: { id: reportId } })
+        if (!report) throw new Error('报告不存在')
+
+        const toStatus = isApproved ? ReportStatus.BOUNTY_APPROVED : ReportStatus.BOUNTY_REJECTED
+
+        const updated = await prisma.report.update({
+          where: { id: reportId },
+          data: {
+            status: toStatus,
+            bountyAmount: isApproved ? amount : report.bountyAmount
+          }
+        })
+
+        await prisma.bountyApproval.create({
+          data: {
+            reportId,
+            approverId,
+            amount,
+            isApproved,
+            comment,
+            approvedAt: isApproved ? new Date() : null
+          }
+        })
+
+        await this.addStatusHistory(reportId, ReportStatus.APPROVING_BOUNTY, toStatus, approverId,
+          `奖金${isApproved ? '通过' : '拒绝'}: ¥${amount}${comment ? ' - ' + comment : ''}`)
+        await this.addAuditLog(
+          isApproved ? 'BOUNTY_APPROVED' : 'BOUNTY_REJECTED',
+          approverId,
+          reportId,
+          `金额: ¥${amount}, ${comment || ''}`
+        )
+
+        return updated
+      }
+    )
   }
 
   static async acknowledgePublicly(reportId: string, userId: string) {
@@ -567,5 +606,178 @@ export class ReportService {
       },
       orderBy: { updatedAt: 'desc' }
     })
+  }
+
+  static async getAuditReplay(reportId: string) {
+    const report = await prisma.report.findUnique({
+      where: { id: reportId },
+      include: {
+        asset: { select: { id: true, name: true } },
+        submitter: { select: { id: true, name: true, username: true, role: true } },
+        assignee: { select: { id: true, name: true, role: true } },
+        statusHistory: {
+          include: {
+            changedBy: { select: { id: true, name: true, role: true } }
+          },
+          orderBy: { createdAt: 'asc' }
+        },
+        auditLogs: {
+          include: {
+            user: { select: { id: true, name: true, role: true } }
+          },
+          orderBy: { createdAt: 'asc' }
+        },
+        retestRecords: {
+          include: {
+            researcher: { select: { id: true, name: true, role: true } }
+          },
+          orderBy: { createdAt: 'asc' }
+        }
+      }
+    })
+
+    if (!report) {
+      throw new Error('报告不存在')
+    }
+
+    const snapshots: any[] = []
+    let currentSnapshot = {
+      status: report.statusHistory[0]?.toStatus || report.status,
+      assigneeId: null as string | null,
+      bountyAmount: null as number | null
+    }
+
+    for (const history of report.statusHistory) {
+      if (history.toStatus === ReportStatus.ASSIGNED) {
+        currentSnapshot.assigneeId = report.assigneeId
+      }
+      if (history.toStatus === ReportStatus.APPROVING_BOUNTY) {
+        currentSnapshot.bountyAmount = Number(report.bountyAmount)
+      }
+      currentSnapshot.status = history.toStatus
+
+      snapshots.push({
+        id: history.id,
+        fromStatus: history.fromStatus,
+        toStatus: history.toStatus,
+        changedBy: history.changedBy,
+        note: history.note,
+        createdAt: history.createdAt,
+        snapshot: { ...currentSnapshot }
+      })
+    }
+
+    return {
+      reportId: report.id,
+      reportTitle: report.title,
+      severity: report.severity,
+      status: report.status,
+      timeline: snapshots,
+      auditLogs: report.auditLogs.map(log => ({
+        id: log.id,
+        action: log.action,
+        userId: log.userId,
+        userName: log.user?.name || null,
+        details: log.details,
+        createdAt: log.createdAt
+      })),
+      retestRecords: report.retestRecords.map(record => ({
+        id: record.id,
+        isVerified: record.isVerified,
+        comment: record.comment,
+        researcherName: record.researcher.name,
+        verifiedAt: record.verifiedAt,
+        createdAt: record.createdAt
+      }))
+    }
+  }
+
+  static async validateCriticalVulnerabilityBounty(reportId: string) {
+    const report = await prisma.report.findUnique({
+      where: { id: reportId },
+      include: {
+        retestRecords: true
+      }
+    })
+
+    if (!report) {
+      return {
+        valid: false,
+        errors: [{ code: 'REPORT_NOT_FOUND', message: '报告不存在' }]
+      }
+    }
+
+    const errors: Array<{ code: string; message: string }> = []
+    const criticalSeverities = [Severity.HIGH, Severity.CRITICAL]
+
+    if (criticalSeverities.includes(report.severity as Severity)) {
+      if (report.status !== ReportStatus.VERIFIED) {
+        errors.push({
+          code: 'INVALID_STATUS',
+          message: '硬校验：严重/高危漏洞必须修复并验证通过后才能申请奖金'
+        })
+      }
+
+      if (!report.retestRecords || report.retestRecords.length === 0) {
+        errors.push({
+          code: 'NO_RETEST_RECORD',
+          message: '硬校验：严重/高危漏洞必须有研究员复测确认记录才能发奖'
+        })
+      } else {
+        const hasVerifiedRetest = report.retestRecords.some(r => r.isVerified)
+        if (!hasVerifiedRetest) {
+          errors.push({
+            code: 'RETEST_NOT_PASSED',
+            message: '硬校验：严重/高危漏洞必须复测通过后才能发奖'
+          })
+        }
+
+        const hasSubmitterVerified = report.retestRecords.some(
+          r => r.isVerified && r.researcherId === report.submitterId
+        )
+        if (!hasSubmitterVerified) {
+          errors.push({
+            code: 'INVALID_RETESTER',
+            message: '硬校验：只有提交报告的研究员才能确认修复结果'
+          })
+        }
+      }
+    }
+
+    return {
+      valid: errors.length === 0,
+      errors
+    }
+  }
+
+  static async processReportWithValidation(
+    reportId: string,
+    userId: string,
+    operation: string,
+    validator: () => Promise<{ valid: boolean; errors: Array<{ code: string; message: string }> }>,
+    executor: () => Promise<any>
+  ) {
+    const validationResult = await validator()
+
+    if (!validationResult.valid) {
+      await this.addAuditLog(
+        `${operation}_VALIDATION_FAILED`,
+        userId,
+        reportId,
+        JSON.stringify(validationResult.errors)
+      )
+      return {
+        success: false,
+        error: validationResult.errors[0]?.message || '业务校验失败',
+        details: validationResult.errors
+      }
+    }
+
+    const result = await executor()
+
+    return {
+      success: true,
+      data: result
+    }
   }
 }

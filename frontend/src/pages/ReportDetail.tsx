@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import axios from 'axios'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate, Link } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { statusLabels, severityLabels, roleLabels, formatDate } from '../utils/statusLabels'
 
@@ -200,6 +200,9 @@ export default function ReportDetail() {
         <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
           <span className={`badge badge-${report.severity}`}>{severityLabels[report.severity]}</span>
           <span className={`badge status-${report.status}`}>{statusLabels[report.status]}</span>
+          <Link to={`/reports/${id}/audit`} className="btn btn-primary">
+            🔍 审计回放
+          </Link>
         </div>
       </div>
 

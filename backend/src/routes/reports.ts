@@ -19,7 +19,10 @@ import {
   getAssignedReports,
   getReportDetail,
   addComment,
-  getAcknowledgedResearchers
+  getAcknowledgedResearchers,
+  getAuditReplay,
+  getAuditLogs,
+  validateBountyEligibility
 } from '../controllers/reportController'
 import { UserRole } from '../types'
 
@@ -30,6 +33,9 @@ router.get('/my', authenticateToken, getMyReports)
 router.get('/assigned', authenticateToken, getAssignedReports)
 router.get('/', authenticateToken, getReportList)
 router.get('/:id', authenticateToken, getReportDetail)
+router.get('/:id/audit', authenticateToken, requireRoles(UserRole.ADMIN, UserRole.TRIAGER), getAuditReplay)
+router.get('/:id/audit-logs', authenticateToken, requireRoles(UserRole.ADMIN, UserRole.TRIAGER), getAuditLogs)
+router.get('/:id/validate-bounty', authenticateToken, validateBountyEligibility)
 
 router.post('/check-duplicate', authenticateToken, preCheckDuplicate)
 router.post('/', authenticateToken, requireRoles(UserRole.RESEARCHER, UserRole.ADMIN), createReport)
