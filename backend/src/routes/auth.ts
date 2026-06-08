@@ -6,7 +6,7 @@ import {
   getCurrentUser,
   getUserList
 } from '../controllers/authController'
-import { UserRole } from '@prisma/client'
+import { UserRole } from '../types'
 
 const router = Router()
 

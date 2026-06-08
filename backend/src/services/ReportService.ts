@@ -1,5 +1,5 @@
 import prisma from '../prisma'
-import { ReportStatus, Severity, UserRole } from '@prisma/client'
+import { ReportStatus, Severity, UserRole, asReportStatus, asSeverity, asUserRole } from '../types'
 import { DuplicateDetectionService } from './DuplicateDetectionService'
 
 export class ReportService {
@@ -105,7 +105,7 @@ export class ReportService {
       report.assetId,
       report.title,
       report.description,
-      report.severity,
+      asSeverity(report.severity),
       reportId
     )
 
@@ -130,7 +130,7 @@ export class ReportService {
 
     return {
       isDuplicate: duplicateCheck.isDuplicate,
-      matches: duplicateCheck.matches?.map((m: any) => ({
+      matches: duplicateCheck.matches?.map((m) => ({
         reportId: m.report.id,
         title: m.report.title,
         similarity: m.similarity,
@@ -166,7 +166,7 @@ export class ReportService {
       throw new Error('报告不存在')
     }
 
-    if (originalReport.status === ReportStatus.DUPLICATE || originalReport.isMerged) {
+    if (asReportStatus(originalReport.status) === ReportStatus.DUPLICATE || originalReport.isMerged) {
       throw new Error('原始报告本身是重复报告，不能作为目标')
     }
 
@@ -182,7 +182,7 @@ export class ReportService {
       }
     })
 
-    await this.addStatusHistory(reportId, report.status, ReportStatus.DUPLICATE, userId,
+    await this.addStatusHistory(reportId, asReportStatus(report.status), ReportStatus.DUPLICATE, userId,
       `手动标记为重复报告，原始报告: ${originalReportId}`)
     await this.addAuditLog('MARK_DUPLICATE', userId, reportId,
       `合并到报告 ${originalReportId}`)
@@ -198,10 +198,10 @@ export class ReportService {
   ) {
     const report = await prisma.report.findUnique({ where: { id: reportId } })
     if (!report) throw new Error('报告不存在')
-    if (report.status === ReportStatus.DUPLICATE || report.isMerged) {
+    if (asReportStatus(report.status) === ReportStatus.DUPLICATE || report.isMerged) {
       throw new Error('重复报告不能分派')
     }
-    if (report.status === ReportStatus.REJECTED) {
+    if (asReportStatus(report.status) === ReportStatus.REJECTED) {
       throw new Error('已拒绝的报告不能分派')
     }
 
@@ -210,11 +210,13 @@ export class ReportService {
       select: { role: true, name: true }
     })
     if (!assignee) throw new Error('开发人员不存在')
-    if (![UserRole.DEVELOPER, UserRole.ADMIN].includes(assignee.role)) {
+    
+    const allowedRoles: UserRole[] = [UserRole.DEVELOPER, UserRole.ADMIN]
+    if (!allowedRoles.includes(asUserRole(assignee.role))) {
       throw new Error('只能分派给开发人员或管理员')
     }
 
-    const fromStatus = report.status
+    const fromStatus = asReportStatus(report.status)
     const updated = await prisma.report.update({
       where: { id: reportId },
       data: {
@@ -239,7 +241,7 @@ export class ReportService {
   static async startFixing(reportId: string, userId: string) {
     const report = await prisma.report.findUnique({ where: { id: reportId } })
     if (!report) throw new Error('报告不存在')
-    if (report.status !== ReportStatus.ASSIGNED) {
+    if (asReportStatus(report.status) !== ReportStatus.ASSIGNED) {
       throw new Error('只有已分派的报告才能开始修复')
     }
     if (report.assigneeId !== userId) {
@@ -260,7 +262,9 @@ export class ReportService {
   static async markAsFixed(reportId: string, userId: string, fixNote?: string) {
     const report = await prisma.report.findUnique({ where: { id: reportId } })
     if (!report) throw new Error('报告不存在')
-    if (![ReportStatus.FIXING, ReportStatus.ASSIGNED].includes(report.status)) {
+    
+    const allowedStatuses: ReportStatus[] = [ReportStatus.FIXING, ReportStatus.ASSIGNED]
+    if (!allowedStatuses.includes(asReportStatus(report.status))) {
       throw new Error('只有修复中的报告才能标记为已修复')
     }
     if (report.assigneeId !== userId) {
@@ -272,7 +276,7 @@ export class ReportService {
       data: { status: ReportStatus.FIXED }
     })
 
-    await this.addStatusHistory(reportId, report.status, ReportStatus.FIXED, userId, fixNote)
+    await this.addStatusHistory(reportId, asReportStatus(report.status), ReportStatus.FIXED, userId, fixNote)
     await this.addAuditLog('MARK_FIXED', userId, reportId, fixNote)
 
     return updated
@@ -281,7 +285,7 @@ export class ReportService {
   static async requestRetest(reportId: string, userId: string) {
     const report = await prisma.report.findUnique({ where: { id: reportId } })
     if (!report) throw new Error('报告不存在')
-    if (report.status !== ReportStatus.FIXED) {
+    if (asReportStatus(report.status) !== ReportStatus.FIXED) {
       throw new Error('只有已修复的报告才能请求复测')
     }
 
@@ -305,7 +309,7 @@ export class ReportService {
   ) {
     const report = await prisma.report.findUnique({ where: { id: reportId } })
     if (!report) throw new Error('报告不存在')
-    if (report.status !== ReportStatus.RETESTING) {
+    if (asReportStatus(report.status) !== ReportStatus.RETESTING) {
       throw new Error('只有复测中的报告才能进行验证')
     }
     if (report.submitterId !== researcherId) {
@@ -345,12 +349,13 @@ export class ReportService {
     const report = await prisma.report.findUnique({ where: { id: reportId } })
     if (!report) throw new Error('报告不存在')
     
-    if (report.status !== ReportStatus.VERIFIED) {
+    if (asReportStatus(report.status) !== ReportStatus.VERIFIED) {
       throw new Error('只有验证通过的报告才能申请奖金审批')
     }
 
-    if ([Severity.HIGH, Severity.CRITICAL].includes(report.severity)) {
-      if (report.status !== ReportStatus.VERIFIED) {
+    const criticalSeverities: Severity[] = [Severity.HIGH, Severity.CRITICAL]
+    if (criticalSeverities.includes(asSeverity(report.severity))) {
+      if (asReportStatus(report.status) !== ReportStatus.VERIFIED) {
         throw new Error('硬校验：严重/高危漏洞必须修复并验证通过后才能申请奖金')
       }
     }
@@ -379,12 +384,13 @@ export class ReportService {
   ) {
     const report = await prisma.report.findUnique({ where: { id: reportId } })
     if (!report) throw new Error('报告不存在')
-    if (report.status !== ReportStatus.APPROVING_BOUNTY) {
+    if (asReportStatus(report.status) !== ReportStatus.APPROVING_BOUNTY) {
       throw new Error('只有审批中的奖金申请才能处理')
     }
 
-    if (isApproved && [Severity.HIGH, Severity.CRITICAL].includes(report.severity)) {
-      if (report.status !== ReportStatus.APPROVING_BOUNTY) {
+    const criticalSeverities: Severity[] = [Severity.HIGH, Severity.CRITICAL]
+    if (isApproved && criticalSeverities.includes(asSeverity(report.severity))) {
+      if (asReportStatus(report.status) !== ReportStatus.APPROVING_BOUNTY) {
         throw new Error('硬校验：严重/高危漏洞必须验证通过后才能发奖')
       }
       const hasVerifiedRetest = await prisma.retestRecord.findFirst({
@@ -431,7 +437,7 @@ export class ReportService {
   static async acknowledgePublicly(reportId: string, userId: string) {
     const report = await prisma.report.findUnique({ where: { id: reportId } })
     if (!report) throw new Error('报告不存在')
-    if (report.status !== ReportStatus.BOUNTY_APPROVED) {
+    if (asReportStatus(report.status) !== ReportStatus.BOUNTY_APPROVED) {
       throw new Error('只有奖金已批准的报告才能公开致谢')
     }
 
@@ -455,7 +461,7 @@ export class ReportService {
   static async rejectReport(reportId: string, userId: string, reason: string) {
     const report = await prisma.report.findUnique({ where: { id: reportId } })
     if (!report) throw new Error('报告不存在')
-    if (report.status === ReportStatus.DUPLICATE || report.isMerged) {
+    if (asReportStatus(report.status) === ReportStatus.DUPLICATE || report.isMerged) {
       throw new Error('重复报告不能拒绝')
     }
 
@@ -464,7 +470,7 @@ export class ReportService {
       data: { status: ReportStatus.REJECTED }
     })
 
-    await this.addStatusHistory(reportId, report.status, ReportStatus.REJECTED, userId, reason)
+    await this.addStatusHistory(reportId, asReportStatus(report.status), ReportStatus.REJECTED, userId, reason)
     await this.addAuditLog('REPORT_REJECTED', userId, reportId, reason)
 
     return updated
@@ -559,8 +565,7 @@ export class ReportService {
         submitter: { select: { id: true, name: true, username: true } },
         asset: { select: { name: true } }
       },
-      orderBy: { updatedAt: 'desc' },
-      distinct: ['submitterId']
+      orderBy: { updatedAt: 'desc' }
     })
   }
 }

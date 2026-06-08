@@ -21,7 +21,7 @@ import {
   addComment,
   getAcknowledgedResearchers
 } from '../controllers/reportController'
-import { UserRole } from '@prisma/client'
+import { UserRole } from '../types'
 
 const router = Router()
 

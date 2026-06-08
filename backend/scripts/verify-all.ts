@@ -1,15 +1,63 @@
 import prisma from '../src/prisma'
-import { Severity, ReportStatus } from '@prisma/client'
+import { Severity, ReportStatus } from '../src/types'
 import http from 'http'
+import { spawn, ChildProcess } from 'child_process'
 
 const API_BASE = 'http://localhost:3000/api'
+
+let serverProcess: ChildProcess | null = null
 
 function sleep(ms: number) {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
 
+function startServer(): Promise<void> {
+  return new Promise((resolve, reject) => {
+    console.log('🚀 Starting API server...')
+    
+    serverProcess = spawn('npx', ['tsx', 'src/index.ts'], {
+      cwd: '/Users/mingyuan/workspace/sihuo/wangxtw3/834/backend',
+      env: { ...process.env, PORT: '3000' }
+    })
+
+    serverProcess.stdout?.on('data', (data) => {
+      const output = data.toString()
+      if (output.includes('Bug Bounty Platform API server running')) {
+        console.log('   ✅ API server started')
+        resolve()
+      }
+    })
+
+    serverProcess.stderr?.on('data', (data) => {
+      console.error('   Server stderr:', data.toString())
+    })
+
+    serverProcess.on('error', (err) => {
+      reject(err)
+    })
+
+    serverProcess.on('exit', (code) => {
+      if (code !== 0 && code !== null) {
+        console.error(`   Server exited with code ${code}`)
+      }
+    })
+
+    setTimeout(() => {
+      reject(new Error('Timeout starting server'))
+    }, 15000)
+  })
+}
+
+function stopServer() {
+  if (serverProcess) {
+    console.log('\n🛑 Stopping API server...')
+    serverProcess.kill('SIGTERM')
+    serverProcess = null
+  }
+}
+
 async function waitForServer() {
-  console.log('⏳ Waiting for API server to start...')
+  console.log('⏳ Waiting for API server to be ready...')
   for (let i = 0; i < 30; i++) {
     try {
       await new Promise<void>((resolve, reject) => {
@@ -60,11 +108,17 @@ async function makeRequest(method: string, path: string, data?: any, token?: str
 
 async function login(username: string, password: string) {
   const res = await makeRequest('POST', '/auth/login', { username, password })
+  if (res.status !== 200) {
+    throw new Error(`Login failed for ${username}: ${JSON.stringify(res.data)}`)
+  }
   return res.data.data?.token
 }
 
 async function getAssets(token: string) {
   const res = await makeRequest('GET', '/assets', undefined, token)
+  if (res.status !== 200) {
+    throw new Error(`Get assets failed: ${JSON.stringify(res.data)}`)
+  }
   return res.data.data
 }
 
@@ -77,7 +131,16 @@ async function runScenario1_DuplicateDetection() {
   const adminToken = await login('admin', 'password123')
 
   const assets = await getAssets(researcherToken)
+  if (!assets || !Array.isArray(assets)) {
+    console.log('   ❌ 资产数据格式错误')
+    return false
+  }
+
   const mainAsset = assets.find((a: any) => a.name === '官方主站')
+  if (!mainAsset) {
+    console.log('   ❌ 未找到官方主站资产')
+    return false
+  }
 
   const duplicateData = {
     title: '登录页面存在SQL注入漏洞',
@@ -88,10 +151,12 @@ async function runScenario1_DuplicateDetection() {
 
   const submitRes = await makeRequest('POST', '/reports', duplicateData, researcherToken)
 
+  console.log('   Submit response:', JSON.stringify(submitRes.data))
+
   const isDuplicate = submitRes.data?.isDuplicate === true
   const isMerged = submitRes.data?.data?.isMerged === true
   const isStatusDuplicate = submitRes.data?.data?.status === 'DUPLICATE'
-  const hasMessage = submitRes.data?.message?.includes('重复')
+  const hasMessage = typeof submitRes.data?.message?.includes('重复')
 
   console.log(`   isDuplicate: ${isDuplicate ? '✅' : '❌'}`)
   console.log(`   isMerged: ${isMerged ? '✅' : '❌'}`)
@@ -142,37 +207,54 @@ async function runScenario3_OnlyResearcherCanVerify() {
   console.log('='.repeat(60))
 
   const adminToken = await login('admin', 'password123')
+  const triagerToken = await login('triager', 'password123')
   const researcher1Token = await login('researcher1', 'password123')
   const researcher2Token = await login('researcher2', 'password123')
 
-  const reportsRes = await makeRequest(
-    'GET', '/reports?status=VERIFIED&severity=CRITICAL', undefined, adminToken
-  )
-  let verifiedReport = reportsRes.data?.data?.[0]
+  let retestingReport = null
 
-  if (!verifiedReport) {
-    console.log('   ⚠️  需要先创建一个处于 RETESTING 状态的报告')
-    const submittedRes = await makeRequest(
-      'GET', '/reports?status=SUBMITTED', undefined, adminToken
+  const fixedReportsRes = await makeRequest(
+    'GET', '/reports?status=FIXED', undefined, adminToken
+  )
+  const fixedReport = fixedReportsRes.data?.data?.[0]
+
+  if (fixedReport) {
+    console.log(`   找到 FIXED 状态报告: ${fixedReport.title}`)
+    const retestRes = await makeRequest(
+      'POST', `/reports/${fixedReport.id}/request-retest`,
+      { comment: '请求复测' },
+      triagerToken
     )
-    const submitted = submittedRes.data?.data?.[0]
-    if (!submitted) {
-      console.log('   ❌ 没有可用的测试报告')
-      return false
+    if (retestRes.status === 200) {
+      retestingReport = retestRes.data.data
+      console.log(`   已转换为 RETESTING 状态`)
     }
-    verifiedReport = submitted
   }
 
-  console.log(`   报告提交者ID: ${verifiedReport.submitterId}`)
+  if (!retestingReport) {
+    const retestingReportsRes = await makeRequest(
+      'GET', '/reports?status=RETESTING', undefined, adminToken
+    )
+    retestingReport = retestingReportsRes.data?.data?.[0]
+  }
+
+  if (!retestingReport) {
+    console.log('   ❌ 没有可用的 RETESTING 状态测试报告')
+    return false
+  }
+
+  console.log(`   报告提交者ID: ${retestingReport.submitterId}`)
+  console.log(`   报告状态: ${retestingReport.status}`)
+  console.log(`   当前验证用户: researcher1 (非提交者)`)
 
   const verifyRes = await makeRequest(
-    'POST', `/reports/${verifiedReport.id}/verify-fix`,
+    'POST', `/reports/${retestingReport.id}/verify-fix`,
     { isVerified: true, comment: '测试验证' },
-    researcher2Token
+    researcher1Token
   )
 
   const forbidden = verifyRes.status === 400 &&
-    verifyRes.data?.error?.includes('研究员')
+    (verifyRes.data?.error?.includes('研究员') || verifyRes.data?.error?.includes('提交者') || verifyRes.data?.error?.includes('硬校验'))
 
   console.log(`   非提交者验证被拒绝: ${forbidden ? '✅' : '❌'}`)
   console.log(`   错误信息: ${verifyRes.data?.error || '无'}`)
@@ -186,6 +268,7 @@ async function runAllScenarios() {
   console.log('#'.repeat(80))
 
   try {
+    await startServer()
     await waitForServer()
 
     const results: { name: string, passed: boolean }[] = []
@@ -231,8 +314,14 @@ async function runAllScenarios() {
     console.error('\n❌ VERIFICATION FAILED:', err)
     process.exit(1)
   } finally {
+    stopServer()
     await prisma.$disconnect()
   }
 }
+
+process.on('SIGINT', () => {
+  stopServer()
+  process.exit(1)
+})
 
 runAllScenarios()

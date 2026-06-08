@@ -1,6 +1,5 @@
 import prisma from '../prisma'
-import { Severity, ReportStatus } from '@prisma/client'
-import { DuplicateCheckResult } from '../types'
+import { Severity, ReportStatus, DuplicateCheckResult, DuplicateMatch, asSeverity, asReportStatus } from '../types'
 
 export class DuplicateDetectionService {
   private static calculateSimilarity(str1: string, str2: string): number {
@@ -46,12 +45,14 @@ export class DuplicateDetectionService {
     description: string,
     severity: Severity,
     excludeReportId?: string
-  ): Promise<DuplicateCheckResult> {
+  ): Promise<DuplicateCheckResult & { matches: DuplicateMatch[] }> {
+    const excludedStatuses = [ReportStatus.REJECTED, ReportStatus.DUPLICATE] as string[]
+    
     const activeReports = await prisma.report.findMany({
       where: {
         assetId,
         id: { not: excludeReportId },
-        status: { notIn: [ReportStatus.REJECTED, ReportStatus.DUPLICATE] },
+        status: { notIn: excludedStatuses },
         isMerged: false
       },
       include: {
@@ -59,6 +60,7 @@ export class DuplicateDetectionService {
       }
     })
 
+    const matches: DuplicateMatch[] = []
     let bestMatch: typeof activeReports[0] | null = null
     let bestScore = 0
     let bestReasons: string[] = []
@@ -93,6 +95,20 @@ export class DuplicateDetectionService {
         reasons.push(`匹配漏洞关键词: ${commonKeywords.join(', ')}`)
       }
 
+      if (score >= 0.4) {
+        matches.push({
+          report: {
+            id: report.id,
+            title: report.title,
+            severity: report.severity,
+            status: report.status,
+            submitter: { name: report.submitter.name }
+          },
+          similarity: score,
+          reason: reasons.join('; ')
+        })
+      }
+
       if (score > bestScore && score >= 0.4) {
         bestScore = score
         bestMatch = report
@@ -100,14 +116,17 @@ export class DuplicateDetectionService {
       }
     }
 
+    matches.sort((a, b) => b.similarity - a.similarity)
+
     if (bestMatch && bestScore >= 0.5) {
       return {
         isDuplicate: true,
+        matches,
         matchingReport: {
           id: bestMatch.id,
           title: bestMatch.title,
-          severity: bestMatch.severity,
-          status: bestMatch.status,
+          severity: asSeverity(bestMatch.severity),
+          status: asReportStatus(bestMatch.status),
           submitterName: bestMatch.submitter.name
         },
         matchScore: bestScore,
@@ -117,6 +136,7 @@ export class DuplicateDetectionService {
 
     return {
       isDuplicate: false,
+      matches,
       matchScore: bestScore,
       matchReasons: []
     }

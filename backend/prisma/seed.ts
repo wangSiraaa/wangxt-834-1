@@ -1,15 +1,20 @@
 import prisma from '../src/prisma'
 import bcrypt from 'bcryptjs'
-import { UserRole, Severity, ReportStatus } from '@prisma/client'
+import { UserRole, Severity, ReportStatus } from '../src/types'
 
 async function main() {
   console.log('🌱 Seeding database...')
 
   const passwordHash = await bcrypt.hash('password123', 10)
 
-  await prisma.user.deleteMany({})
-  await prisma.asset.deleteMany({})
+  await prisma.auditLog.deleteMany({})
+  await prisma.bountyApproval.deleteMany({})
+  await prisma.statusHistory.deleteMany({})
+  await prisma.reportComment.deleteMany({})
+  await prisma.retestRecord.deleteMany({})
   await prisma.report.deleteMany({})
+  await prisma.asset.deleteMany({})
+  await prisma.user.deleteMany({})
 
   const users = await prisma.user.createMany({
     data: [
@@ -226,6 +231,50 @@ async function main() {
     }
   })
 
+  const fixedReport = await prisma.report.create({
+    data: {
+      title: '用户API服务存在越权访问漏洞',
+      description: '用户信息查询接口存在越权访问漏洞，普通用户可以查看其他用户的敏感信息。',
+      proofOfConcept: 'GET /api/users/1 携带普通用户token',
+      severity: Severity.HIGH,
+      assetId: assetMap.get('用户API服务')!.id,
+      submitterId: researcher2.id,
+      status: ReportStatus.FIXED,
+      assigneeId: developer1.id
+    }
+  })
+
+  await prisma.statusHistory.createMany({
+    data: [
+      {
+        reportId: fixedReport.id,
+        toStatus: ReportStatus.SUBMITTED,
+        changedById: researcher2.id,
+        note: '初始提交'
+      },
+      {
+        reportId: fixedReport.id,
+        fromStatus: ReportStatus.SUBMITTED,
+        toStatus: ReportStatus.ASSIGNED,
+        changedById: triager.id,
+        note: '分派给开发工程师甲'
+      },
+      {
+        reportId: fixedReport.id,
+        fromStatus: ReportStatus.ASSIGNED,
+        toStatus: ReportStatus.FIXING,
+        changedById: developer1.id
+      },
+      {
+        reportId: fixedReport.id,
+        fromStatus: ReportStatus.FIXING,
+        toStatus: ReportStatus.FIXED,
+        changedById: developer1.id,
+        note: '已修复越权访问问题'
+      }
+    ]
+  })
+
   const submittedReport = await prisma.report.create({
     data: {
       title: '支付回调接口存在未授权访问',
@@ -238,7 +287,7 @@ async function main() {
     }
   })
 
-  console.log(`  ✅ Created ${4} sample reports with various statuses`)
+  console.log(`  ✅ Created ${5} sample reports with various statuses`)
 
   console.log('\n📋 Seed Data Summary:')
   console.log('  👤 Users:')

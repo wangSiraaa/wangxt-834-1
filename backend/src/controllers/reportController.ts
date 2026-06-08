@@ -1,8 +1,7 @@
 import { Response } from 'express'
-import { AuthRequest } from '../types'
+import { AuthRequest, Severity } from '../types'
 import { ReportService } from '../services/ReportService'
 import { z } from 'zod'
-import { Severity } from '@prisma/client'
 
 const createReportSchema = z.object({
   title: z.string().min(5, '标题至少5个字符'),

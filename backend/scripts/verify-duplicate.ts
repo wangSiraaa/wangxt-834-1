@@ -1,15 +1,57 @@
 import prisma from '../src/prisma'
-import { Severity } from '@prisma/client'
+import { Severity } from '../src/types'
 import http from 'http'
+import { spawn, ChildProcess } from 'child_process'
 
 const API_BASE = 'http://localhost:3000/api'
+
+let serverProcess: ChildProcess | null = null
 
 function sleep(ms: number) {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
 
+function startServer(): Promise<void> {
+  return new Promise((resolve, reject) => {
+    console.log('🚀 Starting API server...')
+    
+    serverProcess = spawn('npx', ['tsx', 'src/index.ts'], {
+      cwd: '/Users/mingyuan/workspace/sihuo/wangxtw3/834/backend',
+      env: { ...process.env, PORT: '3000' }
+    })
+
+    serverProcess.stdout?.on('data', (data) => {
+      const output = data.toString()
+      if (output.includes('Bug Bounty Platform API server running')) {
+        console.log('   ✅ API server started')
+        resolve()
+      }
+    })
+
+    serverProcess.stderr?.on('data', (data) => {
+      console.error('   Server stderr:', data.toString())
+    })
+
+    serverProcess.on('error', (err) => {
+      reject(err)
+    })
+
+    setTimeout(() => {
+      reject(new Error('Timeout starting server'))
+    }, 15000)
+  })
+}
+
+function stopServer() {
+  if (serverProcess) {
+    console.log('\n🛑 Stopping API server...')
+    serverProcess.kill('SIGTERM')
+    serverProcess = null
+  }
+}
+
 async function waitForServer() {
-  console.log('⏳ Waiting for API server to start...')
+  console.log('⏳ Waiting for API server to be ready...')
   for (let i = 0; i < 30; i++) {
     try {
       await new Promise<void>((resolve, reject) => {
@@ -100,6 +142,7 @@ async function verifyScenario() {
   console.log('')
 
   try {
+    await startServer()
     await waitForServer()
 
     console.log('\n1️⃣  Step 1: 登录为研究员2 (researcher2 / password123)')
@@ -209,8 +252,14 @@ username=test' OR 1=1-- &password=123456`,
     console.error('\n❌ VERIFICATION FAILED:', err)
     process.exit(1)
   } finally {
+    stopServer()
     await prisma.$disconnect()
   }
 }
+
+process.on('SIGINT', () => {
+  stopServer()
+  process.exit(1)
+})
 
 verifyScenario()

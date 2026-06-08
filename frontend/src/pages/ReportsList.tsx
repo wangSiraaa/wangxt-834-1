@@ -9,12 +9,13 @@ interface Report {
   title: string
   severity: string
   status: string
-  asset: { name: string }
-  submitter: { name: string }
-  assignee?: { name: string }
+  asset: { id: string; name: string; url?: string }
+  submitter: { id: string; name: string; email?: string; username?: string }
+  assignee?: { id: string; name: string; email?: string; role?: string }
   isMerged: boolean
-  duplicateOf?: { title: string; submitter: { name: string } }
+  duplicateOf?: { id: string; title: string; submitter: { name: string } }
   createdAt: string
+  updatedAt?: string
   _count: { comments: number; duplicates: number }
 }
 

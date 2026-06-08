@@ -7,7 +7,7 @@ import {
   updateAsset,
   toggleAssetActive
 } from '../controllers/assetController'
-import { UserRole } from '@prisma/client'
+import { UserRole } from '../types'
 
 const router = Router()
 
